@@ -347,7 +347,7 @@ int main() {
 Вопрос: будет ли работать оператор присваивания? 
 
 <details><summary>Ответ</summary> 
-Не будет
+Не будет до C++20. В C++20 оператор присваивания будет сгенерирован, если нет захвата переменных.
 
 ```cpp 
 #include <iostream>
@@ -367,4 +367,243 @@ int main() {
 ```
 </details>
 
-36:40
+Вопрос: можно ли объявить вторую лямбда-функции того же типа? 
+
+```cpp 
+#include <iostream>
+
+int main() {
+
+    auto f = [](int x, int y) {        
+        return x < y;
+    };
+
+    decltype(f) ff;
+}
+```
+
+<details><summary>Ответ</summary> 
+До C++20 это CE, а потом можно. По сути вопрос эквивалентен: существует ли конструктор по-умолчанию?
+
+Подробнее о том, какие методы генерируются по-умолчанию, можно посмотреть здесь
+
+https://en.cppreference.com/w/cpp/language/lambda
+
+</details>
+
+## Захват полей класса и this
+
+Рассмотрим ситуацию, когда переменная является полем класса. Будет ли её видно в этом случае?
+
+```cpp
+#include <iostream>
+
+struct S {
+    int a = 1;
+
+    void foo() {
+        auto f = [](int x, int y) {
+            std::cout << a;
+            return x < y;
+        };
+    }
+};
+
+int main() {
+    S s;
+    s.foo();
+}
+```
+
+Ответ: не будет
+
+А если явно указать в списке захвата?
+
+```cpp
+#include <iostream>
+
+struct S {
+    int a = 1;
+
+    void foo() {
+        auto f = [a](int x, int y) {
+            std::cout << a;
+            return x < y;
+        };
+    }
+};
+
+int main() {
+    S s;
+    s.foo();
+}
+```
+
+Ответ: тоже не сработает. Поля класса по отдельности захватывать нельзя. Но можно захватить класс целиком! 
+
+```cpp
+#include <iostream>
+
+struct S {
+    int a = 1;
+
+    void foo() {
+        auto f = [this](int x, int y) {
+            std::cout << a;
+            return x < y;
+        };
+    }
+};
+
+int main() {
+    S s;
+    s.foo();
+}
+```
+
+При захвате this могут возникнуть типичные проблемы времени жизни, функция может пережить захваченный объект. Возникнет UB.
+
+```cpp
+#include <iostream>
+
+struct S {   
+    int a = 1;
+
+    void foo() {
+        auto f = [this](int x) {
+            std::cout << a + x << std::endl;            
+        };
+
+        return f;
+    }
+};
+
+int main() {
+    auto f = S().foo(); // UB
+    auto ff = S().foo();
+
+    f(5);
+    ff(6);
+}
+```
+
+## Захват с инициализацией (C++14)
+
+Для корректной работы захвата при продлении жизни лямбда-функции был создан механизм захвата с инициализацией (capture with initialization)
+
+```cpp
+#include <iostream>
+
+struct S {   
+    int a = 1;
+
+    void foo() {
+        auto f = [b = a](int x) { //создается новое поле b, инициализированное значением a
+            std::cout << b + x << std::endl;            
+        };
+
+        return f;
+    }
+};
+
+int main() {
+    auto f = S().foo(); 
+    auto ff = S().foo();
+
+    f(5);
+    ff(6);
+}
+```
+
+Захват с инициализацией позволяет использовать различные выражения, в т.ч. move
+
+```cpp
+#include <iostream>
+
+struct S {   
+    int a = 1;    
+
+    void foo() {
+        std::string s = "abc";
+        auto f = [s = std::move(s)](int x) { 
+            std::cout << x + s.size() << std::endl;
+        };
+
+        return f;
+    }
+};
+
+int main() {
+    auto f = S().foo(); 
+    auto ff = S().foo();
+
+    f(5);
+    ff(6);
+}
+```
+
+ ## std::function
+
+это специальный тип, который позволяет инциализировать себя вызываемыми (callable) типами. 
+
+```cpp
+#include <functional>
+
+int main() {
+    std::function<bool(int, int)> f; // можно проинициализировать любым объектом 
+                                     // принимающим два параметра int и возвращающим bool
+}
+```
+
+Т.к. лямбда функции являются вызываемыми, то они подходят для инициализации std::function
+
+```cpp
+#include <functional>
+
+int main() {
+    std::function<bool(int, int)> f; 
+    f = [](int x, int y) {
+        std::cout << "lambda f" << std::endl;
+        return x < y;
+    };
+
+    f(1, 2);
+}
+```
+
+Другие варианты инициализации
+
+```cpp
+#include <functional>
+
+struct S {
+    bool operator()(int x, int y) const {
+        std::cout << "callable object" << std::endl;
+        return x > y;
+    }
+
+};
+
+bool g(int x, int y) {
+    std::cout << "c-style function" << std::endl;
+        return x == y;
+}
+
+int main() {
+    std::function<bool(int, int)> f; 
+    f = [](int x, int y) {
+        std::cout << "lambda f" << std::endl;
+        return x < y;
+    };
+
+    f(1, 2);
+
+    f = S();
+    f(3,4);
+
+    f = g;
+    f(5,6);
+}
+```
+
+<span style="background-color: green">Информация о том, как устроен объект std::function изнутри?</span>
